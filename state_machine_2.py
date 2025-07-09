@@ -15,23 +15,25 @@ bandwidth = '80MHz'
 SIFS = 16
 RTS_TA = None
 RTS_RA = None
+RTS_TA_keep = None
+RTS_RA_keep = None
+RTS_TA_previous = 0
+RTS_RA_previous = 0
 CTS_RA = None
+CTS_RA_old = None
 MT_CTS = None
 MT_CTS_old = None
-CTS_RA_old = None
 MT_RTS = None
+MT_Data = None
+MT_ACK = None
 data_addr1 = None
 data_addr2 = None
 ACK_RA = None
-MT_Data = None
 nav_RTS = None
 nav_CTS = None
 nav_ACK = None
-MT_ACK = None
 C_P = 1000
 num_txop = 0
-RTS_TA_previous = 0
-RTS_RA_previous = 0
 
 # Set channel and bandwidth (VHT80)
 subprocess.run(['iw', 'dev', interface, 'set', 'freq', freq_mhz, bandwidth], check=True)
@@ -63,7 +65,7 @@ def nav_helper(nav_raw):
 def packet_callback(packet):
     global SIFS, RTS_TA, CTS_RA, MT_CTS, MT_RTS, data_addr2, ACK_RA, MT_Data, nav_RTS, data_addr1, \
         nav_CTS, nav_ACK, MT_ACK, C_P, MT_CTS_old, CTS_RA_old, num_txop, txop_results, RTS_RA, \
-        RTS_TA_previous, RTS_RA_previous
+        RTS_TA_previous, RTS_RA_previous, RTS_TA_keep, RTS_RA_keep
     if packet.haslayer(Dot11):
         dot11 = packet[Dot11]
         
@@ -75,6 +77,8 @@ def packet_callback(packet):
         if dot11.type == 1 and dot11.subtype == 11:
             RTS_TA = dot11.addr2
             RTS_RA = dot11.addr1
+            RTS_TA_keep = RTS_TA
+            RTS_RA_keep = RTS_RA
             print(f"[RTS] RA: {dot11.addr1}, TA: {dot11.addr2} | {packet.time}")
             print(f"[RTS] MAC time: {mac_ts} μs | TA={dot11.addr2}, RA={dot11.addr1}")
             nav_RTS = nav_helper(dot11.ID)  # Duration value (NAV) in microseconds
@@ -131,7 +135,6 @@ def packet_callback(packet):
                 print("RTS_TA does NOT equal CTS_RA")
                 s2 = S2(MT_RTS, MT_CTS)
                 num_txop += 1
-                print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
                 txop_results.append({
                     "txop_num": num_txop,
                     **s2,
@@ -161,7 +164,7 @@ def packet_callback(packet):
                     "txop_num": num_txop,
                     **s3,
                     "From": CTS_RA_old,
-                    "To": "Unkown", 
+                    "To": "Unknown", 
                     "Ended Properly": "no"
                 })
                 print("*********************************")
@@ -217,8 +220,8 @@ def packet_callback(packet):
                     txop_results.append({
                         "txop_num": num_txop,
                         **s3,
-                        "From": ACK_RA,
-                        "To": "Unkown",
+                        "From": CTS_RA,
+                        "To": "Unknown",
                         "Ended Properly": "no"
                     })
                 else:
@@ -259,20 +262,20 @@ def packet_callback(packet):
                 print("Going from Within TXOP state to TXOP End state")
                 s1 = S1(MT_ACK, None, MT_CTS)
                 num_txop += 1
-                if RTS_TA is None or RTS_TA != CTS_RA: 
+                if RTS_TA_keep is None or RTS_TA_keep != CTS_RA: 
                     txop_results.append({
                         "txop_num": num_txop,
                         **s1,
-                        "From": data_addr2,
-                        "To": data_addr1,
+                        "From": ACK_RA,
+                        "To": "Unknown",
                         "Ended Properly": "yes"
                     })
                 else:
                     txop_results.append({
                         "txop_num": num_txop,
                         **s1,
-                        "From": RTS_TA,
-                        "To": RTS_RA,
+                        "From": RTS_TA_keep,
+                        "To": RTS_RA_keep,
                         "Ended Properly": "yes"
                     })
                 print("*********************************")
@@ -299,8 +302,8 @@ def packet_callback(packet):
                         "txop_num": num_txop,
                         **s3,
                         "From": ACK_RA,
-                        "To": "Unkown",
-                        "Ended Properly": "yes"
+                        "To": "Unknown",
+                        "Ended Properly": "no"
                     })
                 else:
                     txop_results.append({
@@ -308,7 +311,7 @@ def packet_callback(packet):
                         **s3,
                         "From": RTS_TA,
                         "To": RTS_RA,
-                        "Ended Properly": "yes"
+                        "Ended Properly": "no"
                     })
                 print("*********************************")
                 print("TX OP in TXOP End state is", s3["duration"])
