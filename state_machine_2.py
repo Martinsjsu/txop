@@ -30,6 +30,8 @@ nav_ACK = None
 MT_ACK = None
 C_P = 1000
 num_txop = 0
+RTS_TA_previous = 0
+RTS_RA_previous = 0
 
 # Set channel and bandwidth (VHT80)
 subprocess.run(['iw', 'dev', interface, 'set', 'freq', freq_mhz, bandwidth], check=True)
@@ -60,12 +62,14 @@ def nav_helper(nav_raw):
 
 def packet_callback(packet):
     global SIFS, RTS_TA, CTS_RA, MT_CTS, MT_RTS, data_addr2, ACK_RA, MT_Data, nav_RTS, data_addr1, \
-        nav_CTS, nav_ACK, MT_ACK, C_P, MT_CTS_old, CTS_RA_old, num_txop, txop_results, RTS_RA
+        nav_CTS, nav_ACK, MT_ACK, C_P, MT_CTS_old, CTS_RA_old, num_txop, txop_results, RTS_RA, \
+        RTS_TA_previous, RTS_RA_previous
     if packet.haslayer(Dot11):
         dot11 = packet[Dot11]
         
         rt = packet.getlayer(RadioTap)
         mac_ts = getattr(rt, 'mac_timestamp', None)
+
 
         # RTS frame: Type 1 (Control), Subtype 11
         if dot11.type == 1 and dot11.subtype == 11:
@@ -118,6 +122,8 @@ def packet_callback(packet):
         # From Request TXOP to Within TXOP
         if RTS_TA is not None and CTS_RA is not None and C_P <= 2: 
             if RTS_TA == CTS_RA and MT_CTS - MT_RTS >= 40 and MT_CTS - MT_RTS <= 60:
+                RTS_RA_previous = RTS_RA
+                RTS_TA_previous = RTS_TA
                 print("RTS_TA equals CTS_RA")
                 print("Going from Request TXOP state to Within TXOP state")
 
@@ -125,11 +131,12 @@ def packet_callback(packet):
                 print("RTS_TA does NOT equal CTS_RA")
                 s2 = S2(MT_RTS, MT_CTS)
                 num_txop += 1
+                print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
                 txop_results.append({
                     "txop_num": num_txop,
                     **s2,
-                    "From": RTS_TA,
-                    "To": RTS_RA, 
+                    "From": RTS_TA_previous,
+                    "To": RTS_RA_previous, 
                     "Ended Properly": "no"
                 })
                 print("*******************")
@@ -354,7 +361,7 @@ def packet_callback(packet):
     print(" ")
     return 
 
-sniff(iface=interface, prn=packet_callback, timeout=20)
+sniff(iface=interface, prn=packet_callback, timeout=10)
 
 sys.stdout = sys.__stdout__
 log_file.close()
