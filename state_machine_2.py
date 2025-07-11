@@ -4,7 +4,7 @@ from scapy.layers.dot11 import Dot11, RadioTap
 import csv 
 import sys
 
-log_file = open("log.txt", "w")
+log_file = open("log_2.txt", "w")
 sys.stdout = log_file
 txop_results = []
 
@@ -32,6 +32,13 @@ ACK_RA = None
 nav_RTS = None
 nav_CTS = None
 nav_ACK = None
+nav_CF = None
+MT_CF = None
+CF_RA = None
+nav_BA = None
+MT_BA = None
+BA_RA = None
+BA_TA = None
 C_P = 1000
 num_txop = 0
 
@@ -65,7 +72,7 @@ def nav_helper(nav_raw):
 def packet_callback(packet):
     global SIFS, RTS_TA, CTS_RA, MT_CTS, MT_RTS, data_addr2, ACK_RA, MT_Data, nav_RTS, data_addr1, \
         nav_CTS, nav_ACK, MT_ACK, C_P, MT_CTS_old, CTS_RA_old, num_txop, txop_results, RTS_RA, \
-        RTS_TA_previous, RTS_RA_previous, RTS_TA_keep, RTS_RA_keep
+        RTS_TA_previous, RTS_RA_previous, RTS_TA_keep, RTS_RA_keep, MT_BA, nav_BA, nav_CF, MT_CF, BA_RA, CF_RA, BA_TA
     if packet.haslayer(Dot11):
         dot11 = packet[Dot11]
         
@@ -108,6 +115,23 @@ def packet_callback(packet):
             print(f"[ACK] NAV time: {nav_ACK} μs")
             MT_ACK = mac_ts
             C_P = 3
+
+        elif dot11.type == 1 and dot11.subtype == 14:
+            CF_RA = dot11.addr1  # destination of the ACK
+            print(f"[CF_END] MAC time: {mac_ts} μs | RA: {dot11.addr1}")
+            nav_CF = nav_helper(dot11.ID)
+            print(f"[CF_END] NAV time: {nav_CF} μs")
+            MT_CF = mac_ts
+            C_P = 5
+
+        elif dot11.type == 1 and dot11.subtype == 9:
+            BA_RA = dot11.addr1  # destination of the ACK
+            BA_TA = dot11.addr2
+            print(f"[BA] MAC time: {mac_ts} μs | RA: {dot11.addr1}, TA: {dot11.addr2}")
+            nav_BA = nav_helper(dot11.ID)
+            print(f"[BA] NAV time: {nav_BA} μs")
+            MT_BA = mac_ts
+            C_P = 6
 
         # Data frames: type=2, subtype between 0 and 15
         elif dot11.type == 2:
@@ -152,7 +176,13 @@ def packet_callback(packet):
                 MT_Data = None
                 nav_CTS = None
                 nav_ACK = None
-                MT_ACK = None        
+                MT_ACK = None
+                nav_CF = None
+                MT_CF = None
+                CF_RA = None
+                nav_BA = None
+                MT_BA = None
+                BA_RA = None        
 
         # Within TXOP:
         if C_P >= 2 and CTS_RA is not None:
@@ -179,6 +209,13 @@ def packet_callback(packet):
                 MT_ACK = None
                 MT_CTS_old = None
                 CTS_RA_old = None
+                nav_CF = None
+                MT_CF = None
+                CF_RA = None 
+                nav_BA = None
+                MT_BA = None
+                BA_RA = None 
+
             elif data_addr2 != CTS_RA and C_P == 4 and MT_Data - MT_CTS >= nav_CTS:
                 print("here2")
                 s3 = S3(MT_Data, MT_CTS)
@@ -212,6 +249,13 @@ def packet_callback(packet):
                 MT_ACK = None
                 MT_CTS_old = None
                 CTS_RA_old = None
+                nav_CF = None
+                MT_CF = None
+                CF_RA = None 
+                nav_BA = None
+                MT_BA = None
+                BA_RA = None   
+
             elif ACK_RA != CTS_RA and C_P == 3 and MT_ACK - MT_CTS >= nav_CTS:
                 print("here3")
                 s3 = S3(MT_ACK, MT_CTS)
@@ -247,6 +291,55 @@ def packet_callback(packet):
                 MT_ACK = None
                 MT_CTS_old = None
                 CTS_RA_old = None
+                nav_CF = None
+                MT_CF = None
+                CF_RA = None 
+                nav_BA = None
+                MT_BA = None
+                BA_RA = None 
+
+            elif BA_RA != CTS_RA and C_P == 6 and MT_BA - MT_CTS >= nav_CTS:
+                print("here11")
+                s3 = S3(MT_BA, MT_CTS)
+                num_txop += 1
+                if RTS_TA is None or RTS_TA != CTS_RA: 
+                    txop_results.append({
+                        "txop_num": num_txop,
+                        **s3,
+                        "From": CTS_RA,
+                        "To": "Unknown",
+                        "Ended Properly": "no"
+                    })
+                else:
+                    txop_results.append({
+                        "txop_num": num_txop,
+                        **s3,
+                        "From": RTS_TA,
+                        "To": RTS_RA,
+                        "Ended Properly": "no"
+                    })
+                print("*********************************")
+                print("TX OP in Within TXOP state is", s3["duration"])
+                RTS_TA = None
+                CTS_RA = None
+                MT_CTS = None
+                MT_RTS = None
+                data_addr2 = None
+                ACK_RA = None
+                MT_Data = None
+                nav_RTS = None
+                nav_CTS = None
+                nav_ACK = None
+                MT_ACK = None
+                MT_CTS_old = None
+                CTS_RA_old = None
+                nav_CF = None
+                MT_CF = None
+                CF_RA = None
+                nav_BA = None
+                MT_BA = None
+                BA_RA = None
+
             elif MT_Data is not None:
                 print("here4")
                 if (data_addr2 == CTS_RA and MT_Data - MT_CTS <= nav_CTS):
@@ -254,10 +347,13 @@ def packet_callback(packet):
             elif (ACK_RA == CTS_RA and nav_ACK is not None and nav_ACK >= SIFS):
                 print("here5")
                 print("Stay in Within TXOP state again")
+            elif (BA_RA == CTS_RA and nav_BA is not None and nav_BA >= SIFS):
+                print("here5")
+                print("Stay in Within TXOP state again")
 
         # From Within TXOP to TXOP End
-        if ACK_RA is not None and (CTS_RA is not None or data_addr2 is not None):
-            if ACK_RA == CTS_RA and (MT_ACK-MT_CTS <= nav_CTS) and nav_ACK <= SIFS and MT_CTS < MT_ACK:
+        if (ACK_RA is not None or BA_RA is not None or CF_RA is not None) and (CTS_RA is not None or data_addr2 is not None):
+            if ACK_RA == CTS_RA and MT_CTS is not None and MT_ACK is not None and nav_ACK <= SIFS and MT_CTS < MT_ACK:
                 print("END here1")
                 print("Going from Within TXOP state to TXOP End state")
                 s1 = S1(MT_ACK, None, MT_CTS)
@@ -293,7 +389,100 @@ def packet_callback(packet):
                 MT_ACK = None
                 MT_CTS_old = None
                 CTS_RA_old = None
-            elif ACK_RA != CTS_RA and nav_ACK <= SIFS and C_P == 2:
+                nav_CF = None
+                MT_CF = None
+                CF_RA = None
+                nav_BA = None
+                MT_BA = None
+                BA_RA = None
+
+            elif CF_RA is not None and CTS_RA is not None and nav_CF <= SIFS and MT_CTS < MT_CF:
+                print("END here10")
+                print("Going from Within TXOP state to TXOP End state")
+                s1 = S1(MT_CF, None, MT_CTS)
+                num_txop += 1
+                if RTS_TA_keep is None or RTS_TA_keep != CTS_RA: 
+                    txop_results.append({
+                        "txop_num": num_txop,
+                        **s1,
+                        "From": CTS_RA,
+                        "To": "Unknown",
+                        "Ended Properly": "yes"
+                    })
+                else:
+                    txop_results.append({
+                        "txop_num": num_txop,
+                        **s1,
+                        "From": RTS_TA_keep,
+                        "To": RTS_RA_keep,
+                        "Ended Properly": "yes"
+                    })
+                print("*********************************")
+                print("TX OP in TXOP End state is", s1["duration"]) 
+                RTS_TA = None
+                CTS_RA = None
+                MT_CTS = None
+                MT_RTS = None
+                data_addr2 = None
+                ACK_RA = None
+                MT_Data = None
+                nav_RTS = None
+                nav_CTS = None
+                nav_ACK = None
+                MT_ACK = None
+                MT_CTS_old = None
+                CTS_RA_old = None
+                nav_CF = None
+                MT_CF = None
+                CF_RA = None
+                nav_BA = None
+                MT_BA = None
+                BA_RA = None
+
+            elif BA_RA == CTS_RA and MT_CTS is not None and MT_BA is not None and nav_BA <= SIFS and MT_CTS < MT_BA:
+                print("END here20")
+                print("Going from Within TXOP state to TXOP End state")
+                s1 = S1(MT_BA, None, MT_CTS)
+                num_txop += 1
+                if RTS_TA_keep is None or RTS_TA_keep != CTS_RA: 
+                    txop_results.append({
+                        "txop_num": num_txop,
+                        **s1,
+                        "From": BA_RA,
+                        "To": "Unknown",
+                        "Ended Properly": "yes"
+                    })
+                else:
+                    txop_results.append({
+                        "txop_num": num_txop,
+                        **s1,
+                        "From": RTS_TA_keep,
+                        "To": RTS_RA_keep,
+                        "Ended Properly": "yes"
+                    })
+                print("*********************************")
+                print("TX OP in TXOP End state is", s1["duration"]) 
+                RTS_TA = None
+                CTS_RA = None
+                MT_CTS = None
+                MT_RTS = None
+                data_addr2 = None
+                ACK_RA = None
+                MT_Data = None
+                nav_RTS = None
+                nav_CTS = None
+                nav_ACK = None
+                MT_ACK = None
+                MT_CTS_old = None
+                CTS_RA_old = None
+                nav_CF = None
+                MT_CF = None
+                CF_RA = None
+                nav_BA = None
+                MT_BA = None
+                BA_RA = None
+
+            elif ACK_RA != CTS_RA and MT_ACK is not None and nav_ACK <= SIFS and C_P == 2:
                 print("END here2")
                 s3 = S3(MT_CTS, MT_ACK)
                 num_txop += 1
@@ -325,7 +514,14 @@ def packet_callback(packet):
                 MT_ACK = None
                 MT_CTS_old = None
                 CTS_RA_old = None
-            elif ACK_RA == data_addr2 and nav_ACK <= SIFS and C_P == 3 and MT_Data is not None:
+                nav_CF = None
+                MT_CF = None
+                CF_RA = None
+                nav_BA = None
+                MT_BA = None
+                BA_RA = None
+
+            elif ACK_RA == data_addr2 and MT_ACK is not None and nav_ACK <= SIFS and C_P == 3 and MT_Data is not None:
                 print("END here3")
                 s3 = S3(MT_ACK, MT_Data)
                 num_txop += 1
@@ -335,7 +531,7 @@ def packet_callback(packet):
                         **s3,
                         "From": data_addr2,
                         "To": data_addr1,
-                        "Ended Properly": "yes"
+                        "Ended Properly": "no"
                     })
                 else:
                     txop_results.append({
@@ -343,7 +539,7 @@ def packet_callback(packet):
                         **s3,
                         "From": RTS_TA,
                         "To": RTS_RA,
-                        "Ended Properly": "yes"
+                        "Ended Properly": "no"
                     })
                 print("*********************************")
                 print("TX OP in TXOP End state is", s3["duration"])
@@ -360,18 +556,67 @@ def packet_callback(packet):
                 MT_ACK = None
                 MT_CTS_old = None
                 CTS_RA_old = None
+                nav_CF = None
+                MT_CF = None
+                CF_RA = None
+                nav_BA = None
+                MT_BA = None
+                BA_RA = None
+
+            elif BA_RA == data_addr2 and MT_BA is not None and nav_BA <= SIFS and C_P == 6 and MT_Data is not None:
+                print("END here30")
+                s3 = S3(MT_BA, MT_Data)
+                num_txop += 1
+                if RTS_TA is None or RTS_TA != CTS_RA: 
+                    txop_results.append({
+                        "txop_num": num_txop,
+                        **s3,
+                        "From": data_addr2,
+                        "To": data_addr1,
+                        "Ended Properly": "no"
+                    })
+                else:
+                    txop_results.append({
+                        "txop_num": num_txop,
+                        **s3,
+                        "From": RTS_TA,
+                        "To": RTS_RA,
+                        "Ended Properly": "no"
+                    })
+                print("*********************************")
+                print("TX OP in TXOP End state is", s3["duration"])
+                RTS_TA = None
+                CTS_RA = None
+                MT_CTS = None
+                MT_RTS = None
+                data_addr2 = None
+                ACK_RA = None
+                MT_Data = None
+                nav_RTS = None
+                nav_CTS = None
+                nav_ACK = None
+                MT_ACK = None
+                MT_CTS_old = None
+                CTS_RA_old = None
+                nav_CF = None
+                MT_CF = None
+                CF_RA = None
+                nav_BA = None
+                MT_BA = None
+                BA_RA = None
+
     print("The number of TXOP is", num_txop)
     print(" ")
     return 
 
-sniff(iface=interface, prn=packet_callback, timeout=10)
+sniff(iface=interface, prn=packet_callback, timeout=600)
 
 sys.stdout = sys.__stdout__
 log_file.close()
 print("Sniffing done. Output saved to txop_log_output.txt")
 
 # Saving results to a csv
-with open("txop_results.csv", "w", newline="") as csvfile:
+with open("txop_results_2.csv", "w", newline="") as csvfile:
     fieldnames = ["txop_num", "duration", "termination_time", "From", "To","Ended Properly"]
     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
