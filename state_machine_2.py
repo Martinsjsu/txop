@@ -224,16 +224,16 @@ def packet_callback(packet):
                     txop_results.append({
                         "txop_num": num_txop,
                         **s3,
-                        "From": data_addr2,
-                        "To": data_addr1,
+                        "From": CTS_RA,
+                        "To": "Unknown",
                         "Ended Properly": "no"
                     })
                 else:
                     txop_results.append({
                         "txop_num": num_txop,
                         **s3,
-                        "From": data_addr2,
-                        "To": data_addr1,
+                        "From": CTS_RA,
+                        "To": RTS_RA,
                         "Ended Properly": "no"
                     })
                 print("*********************************")
@@ -272,7 +272,7 @@ def packet_callback(packet):
                     txop_results.append({
                         "txop_num": num_txop,
                         **s3,
-                        "From": RTS_TA,
+                        "From": CTS_RA,
                         "To": RTS_RA,
                         "Ended Properly": "no"
                     })
@@ -314,7 +314,7 @@ def packet_callback(packet):
                     txop_results.append({
                         "txop_num": num_txop,
                         **s3,
-                        "From": RTS_TA,
+                        "From": CTS_RA,
                         "To": RTS_RA,
                         "Ended Properly": "no"
                     })
