@@ -4,7 +4,7 @@ from scapy.layers.dot11 import Dot11, RadioTap, Dot11Beacon, Dot11Elt
 import csv 
 import sys
 
-log_file = open("log.txt", "w")
+log_file = open("bpi.txt", "w")
 sys.stdout = log_file
 txop_results = []
 
@@ -710,7 +710,7 @@ def packet_callback(packet):
     print(" ")
     return 
 
-sniff(iface=interface_monitor, prn=packet_callback, timeout=100)
+sniff(iface=interface_monitor, prn=packet_callback, timeout=600)
 
 sys.stdout = sys.__stdout__
 log_file.close()
@@ -724,5 +724,5 @@ with open("txop_results.csv", "w", newline="") as csvfile:
     writer.writeheader()
     writer.writerows(txop_results)
 
-print("Saved TXOP results to txop_results.csv")
+print("Saved TXOP results to txop_results_bpi.csv")
 subprocess.run(['airmon-ng', 'stop', interface_monitor], check=True)
