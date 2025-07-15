@@ -4,22 +4,23 @@ from scapy.layers.dot11 import Dot11, RadioTap, Dot11Beacon, Dot11Elt
 import csv 
 import sys
 
-log_file = open("bpi.txt", "w")
+log_file = open("log_medium.txt", "w")
 sys.stdout = log_file
 txop_results = []
 
-interface = 'wlp34s0'
-interface_monitor = 'wlp34s0mon'
-freq_mhz = '5805'
+interface = 'wlp65s0'
+interface_monitor = 'wlp65s0mon'
+freq_mhz = '5745'
 bandwidth = '80MHz'
 
 SIFS = 16
 RTS_TA = None
-RTS_RA = None
+RTS_RA = None   
 RTS_TA_keep = None
 RTS_RA_keep = None
 RTS_TA_previous = 0
 RTS_RA_previous = 0
+RTS_nav_previous = 0
 CTS_RA = None
 CTS_RA_old = None
 MT_CTS = None
@@ -42,7 +43,9 @@ BA_RA = None
 BA_TA = None
 C_P = 1000
 num_txop = 0
+channel_util = 0
 cu_class = None
+CTS_nav_old = 0
 
 # Set channel and bandwidth (VHT80)
 subprocess.run(['airmon-ng', 'start', interface], check=True)
@@ -74,7 +77,7 @@ def nav_helper(nav_raw):
     return nav_fixed
 
 def extract_channel_utilization(packet):
-    channel_util = None 
+    chu = 0
     if packet.haslayer(Dot11Beacon):
         ssid = packet[Dot11Elt].info.decode(errors='ignore') if packet.haslayer(Dot11Elt) else "<Hidden>"
 
@@ -84,32 +87,33 @@ def extract_channel_utilization(packet):
                 bss_load_info = el.info
                 if len(bss_load_info) >= 3:
                     station_count = int.from_bytes(bss_load_info[0:2], byteorder='little')
-                    channel_util = bss_load_info[2]
-                    print(f"[BEACON] SSID: {ssid} | Station Count: {station_count} | Channel Utilization: {channel_util}/255 ({(channel_util / 255.0) * 100:.1f}%)")
+                    chu = bss_load_info[2]
+                    print(f"[BEACON] SSID: {ssid} | Station Count: {station_count} | Channel Utilization: {chu}/255 ({(chu/ 255.0) * 100:.1f}%)")
                 break
             el = el.payload.getlayer(Dot11Elt)
-    return channel_util/255
 
-def classify_channel_utilization(channel_util):
-    ch_u_class = None
-    if channel_util <= 0.33:
-        ch_u_class = 'low channel utilization'
-    elif channel_util > 0.33 and channel_util<0.66:
-        ch_u_class = 'medium channel utilization'
-    else:
-        ch_u_class = 'high channel utilization'
-    return ch_u_class
+    return (chu / 255.0) * 100
+
+# def classify_channel_utilization(channel_util):
+#     ch_u_class = None
+#     if channel_util <= 0.33:
+#         ch_u_class = 'low channel utilization'
+#     elif channel_util > 0.33 and channel_util<0.66:
+#         ch_u_class = 'medium channel utilization'
+#     else:
+#         ch_u_class = 'high channel utilization'
+#     return ch_u_class
 
 def packet_callback(packet):
     global SIFS, RTS_TA, CTS_RA, MT_CTS, MT_RTS, data_addr2, ACK_RA, MT_Data, nav_RTS, data_addr1, \
         nav_CTS, nav_ACK, MT_ACK, C_P, MT_CTS_old, CTS_RA_old, num_txop, txop_results, RTS_RA, \
         RTS_TA_previous, RTS_RA_previous, RTS_TA_keep, RTS_RA_keep, MT_BA, nav_BA, nav_CF, MT_CF, \
-        BA_RA, CF_RA, BA_TA, cu_class
+        BA_RA, CF_RA, BA_TA, channel_util, cu_class, RTS_nav_previous, CTS_nav_old
     if packet.haslayer(Dot11):
         dot11 = packet[Dot11]
         
         rt = packet.getlayer(RadioTap)
-        mac_ts = getattr(rt, 'mac_timestamp', None)
+        mac_ts = getattr(rt, 'timestamp', None)
 
 
         # RTS frame: Type 1 (Control), Subtype 11
@@ -131,6 +135,7 @@ def packet_callback(packet):
             if C_P == 2:
                 CTS_RA_old = CTS_RA
                 MT_CTS_old = MT_CTS
+                CTS_nav_old = nav_CTS
             CTS_RA = dot11.addr1
             print(f"[CTS] RA: {dot11.addr1} | {packet.time}")
             print(f"[CTS] MAC time: {mac_ts} μs | RA={dot11.addr1}")
@@ -171,8 +176,8 @@ def packet_callback(packet):
         elif dot11.type == 0 and dot11.subtype == 8:
             print(f"[BEACON] from {dot11.addr2}")
             channel_util = extract_channel_utilization(packet)
-            if channel_util is not None:
-                cu_class = classify_channel_utilization(channel_util)
+            # if channel_util is not None:
+            #     cu_class = classify_channel_utilization(channel_util)
             
         # Data frames: type=2, subtype between 0 and 15
         elif dot11.type == 2:
@@ -190,9 +195,10 @@ def packet_callback(packet):
 
         # From Request TXOP to Within TXOP
         if RTS_TA is not None and CTS_RA is not None and C_P <= 2: 
-            if RTS_TA == CTS_RA and MT_CTS - MT_RTS >= 40 and MT_CTS - MT_RTS <= 60:
+            if RTS_TA == CTS_RA and MT_CTS - MT_RTS >= 30 and MT_CTS - MT_RTS <= 75:
                 RTS_RA_previous = RTS_RA
                 RTS_TA_previous = RTS_TA
+                RTS_nav_previous = nav_RTS
                 print("RTS_TA equals CTS_RA")
                 print("Going from Request TXOP state to Within TXOP state")
 
@@ -206,9 +212,11 @@ def packet_callback(packet):
                     "From": RTS_TA_previous,
                     "To": RTS_RA_previous, 
                     "Ended Properly": "no",
-                    "Channel Utilization": cu_class,
+                    "Channel Utilization": channel_util,
                     "TXOPs based on": "CTS",
-                    "Terminated by": "Another RTS"
+                    "Terminated by": "Another RTS",
+                    "Announced duration": nav_CTS,
+                    "RTS nav": RTS_nav_previous
                 })
                 print("*******************")
                 print("TX OP in S2 is ",  s2["duration"])
@@ -240,9 +248,11 @@ def packet_callback(packet):
                     "From": CTS_RA_old,
                     "To": "Unknown", 
                     "Ended Properly": "no",
-                    "Channel Utilization": cu_class,
-                    "TXOPs based on": "CTS",
-                    "Terminated by": "Another CTS"
+                    "Channel Utilization": channel_util,
+                    "TXOPs based on": "Previous CTS",
+                    "Terminated by": "New CTS",
+                    "Announced duration": CTS_nav_old,
+                    "RTS nav": nav_RTS
                 })
                 print("*********************************")
                 print("TX OP in Within TXOP state is", s3["duration"])
@@ -263,32 +273,22 @@ def packet_callback(packet):
                 MT_BA = None
                 BA_RA = None 
 
-            elif data_addr2 != CTS_RA and C_P == 4 and MT_Data - MT_CTS >= nav_CTS:
+            elif data_addr2 != CTS_RA and C_P == 4 and MT_Data is not None and MT_Data - MT_CTS >= nav_CTS:
                 print("here2")
                 s3 = S3(MT_Data, MT_CTS)
                 num_txop += 1
-                if RTS_TA is None or RTS_TA != CTS_RA: 
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s3,
-                        "From": CTS_RA,
-                        "To": "Unknown",
-                        "Ended Properly": "no",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Another Data"
-                    })
-                else:
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s3,
-                        "From": CTS_RA,
-                        "To": RTS_RA,
-                        "Ended Properly": "no",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Another Data"
-                    })
+                txop_results.append({
+                    "txop_num": num_txop,
+                    **s3,
+                    "From": CTS_RA,
+                    "To": "Unknown" if (RTS_TA is None or RTS_TA != CTS_RA) else RTS_RA,
+                    "Ended Properly": "no",
+                    "Channel Utilization": channel_util,
+                    "TXOPs based on": "CTS",
+                    "Terminated by": "Another Data",
+                    "Announced duration": nav_CTS,
+                    "RTS nav": nav_RTS
+                })
                 print("*********************************")
                 print("TX OP in Within TXOP state is", s3["duration"])
                 RTS_TA = None
@@ -309,32 +309,22 @@ def packet_callback(packet):
                 MT_BA = None
                 BA_RA = None   
 
-            elif ACK_RA != CTS_RA and C_P == 3 and MT_ACK - MT_CTS >= nav_CTS:
+            elif ACK_RA != CTS_RA and C_P == 3 and MT_ACK is not None and MT_ACK - MT_CTS >= nav_CTS:
                 print("here3")
                 s3 = S3(MT_ACK, MT_CTS)
                 num_txop += 1
-                if RTS_TA is None or RTS_TA != CTS_RA: 
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s3,
-                        "From": CTS_RA,
-                        "To": "Unknown",
-                        "Ended Properly": "no",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Another ACK"
-                    })
-                else:
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s3,
-                        "From": CTS_RA,
-                        "To": RTS_RA,
-                        "Ended Properly": "no",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Another ACK"
-                    })
+                txop_results.append({
+                    "txop_num": num_txop,
+                    **s3,
+                    "From": CTS_RA,
+                    "To": "Unknown" if (RTS_TA is None or RTS_TA != CTS_RA) else RTS_RA,
+                    "Ended Properly": "no",
+                    "Channel Utilization": channel_util,
+                    "TXOPs based on": "CTS",
+                    "Terminated by": "Another ACK",
+                    "Announced duration": nav_CTS,
+                    "RTS nav": nav_RTS
+                })
                 print("*********************************")
                 print("TX OP in Within TXOP state is", s3["duration"])
                 RTS_TA = None
@@ -357,32 +347,22 @@ def packet_callback(packet):
                 MT_BA = None
                 BA_RA = None 
 
-            elif BA_RA != CTS_RA and C_P == 6 and MT_BA - MT_CTS >= nav_CTS:
+            elif BA_RA != CTS_RA and C_P == 6 and MT_BA is not None and MT_BA - MT_CTS >= nav_CTS:
                 print("here11")
                 s3 = S3(MT_BA, MT_CTS)
                 num_txop += 1
-                if RTS_TA is None or RTS_TA != CTS_RA: 
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s3,
-                        "From": CTS_RA,
-                        "To": "Unknown",
-                        "Ended Properly": "no",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Another BA"
-                    })
-                else:
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s3,
-                        "From": CTS_RA,
-                        "To": RTS_RA,
-                        "Ended Properly": "no",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Another BA"
-                    })
+                txop_results.append({
+                    "txop_num": num_txop,
+                    **s3,
+                    "From": CTS_RA,
+                    "To": "Unknown" if (RTS_TA is None or RTS_TA != CTS_RA) else RTS_RA,
+                    "Ended Properly": "no",
+                    "Channel Utilization": channel_util,
+                    "TXOPs based on": "CTS",
+                    "Terminated by": "Another BA",
+                    "Announced duration": nav_CTS,
+                    "RTS nav": nav_RTS
+                })
                 print("*********************************")
                 print("TX OP in Within TXOP state is", s3["duration"])
                 RTS_TA = None
@@ -413,7 +393,7 @@ def packet_callback(packet):
                 print("here5")
                 print("Stay in Within TXOP state again")
             elif (BA_RA == CTS_RA and nav_BA is not None and nav_BA >= SIFS):
-                print("here5")
+                print("here6")
                 print("Stay in Within TXOP state again")
 
         # From Within TXOP to TXOP End
@@ -423,28 +403,18 @@ def packet_callback(packet):
                 print("Going from Within TXOP state to TXOP End state")
                 s1 = S1(MT_ACK, None, MT_CTS)
                 num_txop += 1
-                if RTS_TA_keep is None or RTS_TA_keep != CTS_RA: 
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s1,
-                        "From": ACK_RA,
-                        "To": "Unknown",
-                        "Ended Properly": "yes",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Final ACK"
-                    })
-                else:
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s1,
-                        "From": RTS_TA_keep,
-                        "To": RTS_RA_keep,
-                        "Ended Properly": "yes",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Final ACK"
-                    })
+                txop_results.append({
+                    "txop_num": num_txop,
+                    **s1,
+                    "From": ACK_RA,
+                    "To": "Unknown" if (RTS_TA is None or RTS_TA != CTS_RA) else RTS_RA,
+                    "Ended Properly": "yes",
+                    "Channel Utilization": channel_util,
+                    "TXOPs based on": "CTS",
+                    "Terminated by": "Final ACK",
+                    "Announced duration":nav_CTS,
+                    "RTS nav": nav_RTS
+                })
                 print("*********************************")
                 print("TX OP in TXOP End state is", s1["duration"]) 
                 RTS_TA = None
@@ -472,28 +442,18 @@ def packet_callback(packet):
                 print("Going from Within TXOP state to TXOP End state")
                 s1 = S1(MT_CF, None, MT_CTS)
                 num_txop += 1
-                if RTS_TA_keep is None or RTS_TA_keep != CTS_RA: 
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s1,
-                        "From": CTS_RA,
-                        "To": "Unknown",
-                        "Ended Properly": "yes",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "CF-END"
-                    })
-                else:
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s1,
-                        "From": RTS_TA_keep,
-                        "To": RTS_RA_keep,
-                        "Ended Properly": "yes",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "CF-END"
-                    })
+                txop_results.append({
+                    "txop_num": num_txop,
+                    **s1,
+                    "From": CTS_RA,
+                    "To": "Unknown" if (RTS_TA is None or RTS_TA != CTS_RA) else RTS_RA,
+                    "Ended Properly": "yes",
+                    "Channel Utilization": channel_util,
+                    "TXOPs based on": "CTS",
+                    "Terminated by": "CF-END",
+                    "Announced duration": nav_CTS,
+                    "RTS nav": nav_RTS
+                })
                 print("*********************************")
                 print("TX OP in TXOP End state is", s1["duration"]) 
                 RTS_TA = None
@@ -521,28 +481,18 @@ def packet_callback(packet):
                 print("Going from Within TXOP state to TXOP End state")
                 s1 = S1(MT_BA, None, MT_CTS)
                 num_txop += 1
-                if RTS_TA_keep is None or RTS_TA_keep != CTS_RA: 
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s1,
-                        "From": BA_RA,
-                        "To": "Unknown",
-                        "Ended Properly": "yes",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Final BA"
-                    })
-                else:
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s1,
-                        "From": RTS_TA_keep,
-                        "To": RTS_RA_keep,
-                        "Ended Properly": "yes",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Final BA"
-                    })
+                txop_results.append({
+                    "txop_num": num_txop,
+                    **s1,
+                    "From": BA_RA,
+                    "To": "Unknown"if (RTS_TA is None or RTS_TA != CTS_RA) else RTS_RA,
+                    "Ended Properly": "yes",
+                    "Channel Utilization": channel_util,
+                    "TXOPs based on": "CTS",
+                    "Terminated by": "Final BA",
+                    "Announced duration": nav_CTS,
+                    "RTS nav": nav_RTS
+                })
                 print("*********************************")
                 print("TX OP in TXOP End state is", s1["duration"]) 
                 RTS_TA = None
@@ -569,28 +519,18 @@ def packet_callback(packet):
                 print("END here2")
                 s3 = S3(MT_CTS, MT_ACK)
                 num_txop += 1
-                if RTS_TA is None or RTS_TA != CTS_RA: 
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s3,
-                        "From": ACK_RA,
-                        "To": "Unknown",
-                        "Ended Properly": "no",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Another BA"
-                    })
-                else:
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s3,
-                        "From": RTS_TA,
-                        "To": RTS_RA,
-                        "Ended Properly": "no",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Another BA"
-                    })
+                txop_results.append({
+                    "txop_num": num_txop,
+                    **s3,
+                    "From": ACK_RA,
+                    "To": "Unknown" if (RTS_TA is None or RTS_TA != CTS_RA) else RTS_RA,
+                    "Ended Properly": "no",
+                    "Channel Utilization": channel_util,
+                    "TXOPs based on": "CTS",
+                    "Terminated by": "Another BA",
+                    "Announced duration": nav_CTS,
+                    "RTS nav": nav_RTS
+                })
                 print("*********************************")
                 print("TX OP in TXOP End state is", s3["duration"])
                 RTS_TA = None
@@ -614,28 +554,18 @@ def packet_callback(packet):
                 print("END here3")
                 s3 = S3(MT_ACK, MT_Data)
                 num_txop += 1
-                if RTS_TA is None or RTS_TA != CTS_RA: 
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s3,
-                        "From": data_addr2,
-                        "To": data_addr1,
-                        "Ended Properly": "no",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Another Data"
-                    })
-                else:
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s3,
-                        "From": RTS_TA,
-                        "To": RTS_RA,
-                        "Ended Properly": "no",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Another Data"
-                    })
+                txop_results.append({
+                    "txop_num": num_txop,
+                    **s3,
+                    "From": data_addr2,
+                    "To": data_addr1 if (RTS_TA is None or RTS_TA != CTS_RA) else RTS_RA,
+                    "Ended Properly": "no",
+                    "Channel Utilization": channel_util,
+                    "TXOPs based on": "Data",
+                    "Terminated by": "ACK",
+                    "Announced duration": nav_CTS,
+                    "RTS nav": nav_RTS
+                })
                 print("*********************************")
                 print("TX OP in TXOP End state is", s3["duration"])
                 RTS_TA = None
@@ -662,28 +592,18 @@ def packet_callback(packet):
                 print("END here30")
                 s3 = S3(MT_BA, MT_Data)
                 num_txop += 1
-                if RTS_TA is None or RTS_TA != CTS_RA: 
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s3,
-                        "From": data_addr2,
-                        "To": data_addr1,
-                        "Ended Properly": "no",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Another Data"
-                    })
-                else:
-                    txop_results.append({
-                        "txop_num": num_txop,
-                        **s3,
-                        "From": RTS_TA,
-                        "To": RTS_RA,
-                        "Ended Properly": "no",
-                        "Channel Utilization": cu_class,
-                        "TXOPs based on": "CTS",
-                        "Terminated by": "Another Data"
-                    })
+                txop_results.append({
+                    "txop_num": num_txop,
+                    **s3,
+                    "From": data_addr2,
+                    "To": data_addr1 if (RTS_TA is None or RTS_TA != CTS_RA) else RTS_RA,
+                    "Ended Properly": "no",
+                    "Channel Utilization": channel_util,
+                    "TXOPs based on": "Data",
+                    "Terminated by": "BA",
+                    "Announced duration": nav_CTS,
+                    "RTS nav": nav_RTS
+                })
                 print("*********************************")
                 print("TX OP in TXOP End state is", s3["duration"])
                 RTS_TA = None
@@ -717,12 +637,14 @@ log_file.close()
 print("Sniffing done. Output saved to txop_log_output.txt")
 
 # Saving results to a csv
-with open("txop_results.csv", "w", newline="") as csvfile:
-    fieldnames = ["txop_num", "duration", "termination_time", "From", "To","Ended Properly", "Channel Utilization", "TXOPs based on", "Terminated by"]
+with open("txop_results_medium.csv", "w", newline="") as csvfile:
+    fieldnames = ["txop_num", "duration", "termination_time", "From", "To","Ended Properly", "Channel Utilization", "TXOPs based on", "Terminated by", \
+                  "Announced duration", "RTS nav"]
     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
     writer.writeheader()
     writer.writerows(txop_results)
 
-print("Saved TXOP results to txop_results_bpi.csv")
+print("Saved TXOP results to txop_results.csv")
 subprocess.run(['airmon-ng', 'stop', interface_monitor], check=True)
+
